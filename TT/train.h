@@ -10,113 +10,214 @@ class TensorTrain
 {
   private:
     Cube<T> tensor;
-    Cube<T> *cores;
-    int modeNum;
-    int *modeSize;
-    int *ttRank;
+    Cube<T> cores[3];
+    int ttRank[4];
     double delta;
-    void getTTform();
-    int numel()
-    {
-        int temp = 1;
-        for (int i = 0; i < modeNum; ++i)
-            temp *= modeSize[i];
-        return temp;
-    }
-    inline void rounding();
-    inline void copy();
-    inline Mat<T> ten2mat(Cube<T> &a, int row, int col);
+    void calculateTTcores();
 
   public:
     TensorTrain() {}
     TensorTrain(const Cube<T> &t, const double &epsilon);
-    TensorTrain(const TensorTrain<T> &t, bool onlyCopy);
+    TensorTrain(const TensorTrain<T> &t);
+    TensorTrain(const TensorTrain<T> &t, double newDelta);
     TensorTrain(const cp_mats<T> &t);
     ~TensorTrain();
-    Cube<T> &getTensor() const { return tensor; }
-    int getSize()
-    {
-        // 返回维度数目
-        return modeNum;
-    }
-    int getSize(int mode)
-    {
-        // 返回选中维度大小
-        return modeSize[mode - 1];
-    }
+
+    const Cube<T> &getTensor();
+    const int &getTTRank(int index);
+    const double &getDelta();
+    const Cube<T> &getCores(int index);
+
+    void updateDelta(int newDelta);
+
+    const int &numel();
+    const int &size(int mode);
+
     friend TensorTrain<T> operator+(const TensorTrain<T> &t1, const TensorTrain<T> &t2);
+    friend void multiContraction();
+    friend void dotProduct();
 };
 
 template <class T>
-TensorTrain<T>::TensorTrain(const Cube<T> &t, const double &epsilon) : tensor(t), modeNum(3)
+TensorTrain<T>::TensorTrain(const Cube<T> &t, const double &epsilon)
 {
-    modeSize = new int(modeNum);
-    modeSize[0] = t.n_rows;
-    modeSize[1] = t.n_cols;
-    modeSize[2] = t.n_slices;
-    delta = epsilon * norm(t) / sqrt(modeNum - 1); //norm is in tensor.cpp
-    cores = new Cube<T>(modeNum);
-    ttRank = new int(modeNum + 1);
-    getTTform();
+    tensor = t;
+    delta = epsilon * norm(t, "fro") / sqrt(modeNum - 1);
+    calculateTTcores();
 }
 
 template <class T>
-TensorTrain<T>::TensorTrain(const TensorTrain<T> &t, bool onlyCopy)
+TensorTrain<T>::TensorTrain(const TensorTrain<T> &t)
 {
-    if (onlyCopy)
+    tensor = t.getTensor();
+    for (int i = 0; i < 3; ++)
     {
-        copy();
+        cores[i] = t.getCore(i);
     }
-    else
+    for (int i = 0; i < 4; ++i)
     {
-        // TT-rounding
-        rounding();
+        ttRank[i] = t.getTTRank(i);
     }
+    delta = t.getTTRank();
+}
+
+template <class T>
+TensorTrain<T>::TensorTrain(const TensorTrain<T> &t, double newDelta)
+{
+    Mat<T> temp;
+    for (int k = 2; k > 0; --1)
+    {
+    }
+    qr()
+}
+
+template <class T>
+TensorTrain<T>::TensorTrain(const cp_mats<T> &t)
+{
 }
 
 template <class T>
 TensorTrain<T>::~TensorTrain()
 {
-    delete[] modeSize;
-    delete[] cores;
-    delete[] ttRank;
 }
 
 template <class T>
-void TensorTrain<T>::getTTform()
+inline const Cube<T> &TensorTrain<T>::getTensor()
+{
+    return tensor;
+}
+
+template <class T>
+inline const double &TensorTrain<T>::getDelta()
+{
+    return delta;
+}
+
+template <class T>
+inline const Cube<T> &TensorTrain<T>::getCore(int index)
+{
+    return cores[index];
+}
+template <class T>
+inline const int &TensorTrain<T>::getTTRank(int index)
+{
+    return ttRank[index];
+}
+
+template <class T>
+inline const int &TensorTrain<T>::numel()
+{
+    return tensor.n_elem;
+}
+
+template <class T>
+inline const int TensorTrain<T>::size(int mode)
+{
+    switch (mode)
+    {
+    case 1:
+        return tensor.n_rows;
+    case 2:
+        return tensor.n_cols;
+    case 3:
+        return tensor.n_slices;
+    }
+}
+
+template <class T>
+void TensorTrain<T>::calculateTTcores()
 {
     ttRank[0] = 1;
-    ttRank[modeNum] = 1;
+    ttRank[3] = 1;
     Cube<T> tempTensor = tensor;
     Mat<T> tempMat;
-    for (int i = 1; i < modeNum; ++i)
+    for (int i = 1; i < 3; ++i)
     {
         int rowSize = ttRank[i - 1] * modeSize[i - 1];
-        tempMat = ten2mat(tempTensor, rowSize, numel(tensor)); // 这里仅适用于三维
+        tempMat = ten2mat(tempTensor, rowSize, numel(tensor));
         Mat<T> U, S, V;
         int r;
         deltaSVD(tempMat, U, S, V, r, delta);
         ttRank[i] = r;
-        cores[i - 1] = reshape(U * S * V.t(), ttRank[i - 1], modeSize[i - 1], ttRank[i]); // need to implement
+        mat2ten(U, cores[i - 1], ttRank[i - 1], modeSize[i - 1], ttRank[i]); // need to implement
+        tempTensor = S * V.t();
     }
     cores[modeNum - 1] = tempTensor;
 }
 
 template <class T>
-inline void TensorTrain<T>::rounding()
+void TensorTrain<T>::updateDelta(int newDelta)
 {
+    *this = TensorTrain(*this, newDelta);
 }
+
+// need to testify
 template <class T>
-inline void TensorTrain<T>::copy()
+Mat<T> ten2mat(const Cube<T> &t, const int &row, const int &col)
 {
+    if (t.numel() != row * col)
+    {
+        cout << "参数设置错误与张量大小不匹配" << endl;
+    }
+    Mat<T> re(row, col);
+    int pos;
+    int m = t.n_rows, n = t.n_cols, s = t.n_slices;
+    // addressing from lower dimension to higher
+    for (int i = 0; i < t.n_rows; ++i)
+    {
+        for (int j = 0; j < t.n_cols; ++j)
+        {
+            for (int k = 0; k < t.n_slices; ++k)
+            {
+                pos = i + j * m + k * m * n;
+                re[pos % row][floor(pos / row)] = t(i, j, k);
+            }
+        }
+    }
+    return re;
 }
+
+/*
 template <class T>
-inline Mat<T> TensorTrain<T>::ten2mat(Cube<T> &t, int row, int col)
+void ten2mat(const Cube<T> &t, Mat<T> &re, const int &row, const int &col)
 {
+    int pos;
+    int m = t.n_rows, n = t.n_cols, s = t.n_slices;
+    re.resize(row,col);
+    // addressing from lower dimension to higher
+    for (int i = 0; i < t.n_rows; ++i)
+    {
+        for (int j = 0; j < t.n_cols; ++j)
+        {
+            for (int k = 0; k < t.n_slices; ++k)
+            {
+                pos = i + j * m + k * m * n;
+                re[pos % row][floor(pos / col)] = t(i, j, k);
+            }
+        }
+    }
 }
+*/
+
+// need to testify
 template <class T>
-inline Mat<T> TensorTrain<T>::reshape(Mat<T> &m, Cube<T> &t, int row, int col, int slice)
+void mat2ten(const Mat<T> &mat, Cube<T> &re, const int &row, const int &col, const int &slice)
 {
+    if (mat.n_elem != row * col * slice)
+    {
+        cout << "参数设置错误与矩阵大小不匹配" << endl;
+    }
+    int pos;
+    int m = mat.n_rows, n = mat.n_cols;
+    re.resize(row, col, slice);
+    for (int i = 0; i < m; ++i)
+    {
+        for (int j = 0; j < n; ++j)
+        {
+            pos = i + j * m;
+            re[pos % row][floor(pos / row) % col][floor(pos / (row * col))] = mat(i, j);
+        }
+    }
 }
 // -------------------------------------------------------------
 template <class T>
@@ -149,15 +250,23 @@ void truncation(Col<T> &s, int &r, const double &delta)
 template <class T>
 TensorTrain<T> operator+(const TensorTrain<T> &t1, const TensorTrain<T> &t2)
 {
-    if (t1.modeNum != t2.modeNum)
-        return new TensorTrain<T>();
-    TensorTrain<T> answer(t1, true);
-    answer.cores[0] = new Cube<T>(1, t1.modeSize[t1.modeNum], t1.cores[0].n3 + t2.cores[0].n3);
-    answer.cores[t1.modeNum] = new Cube<T>(t1.cores[0].n1 + t2.cores[0].n1, t1.modeSize[t1.modeNum], 1);
-    for (int i = 1; i < t1.modeNum; ++i)
-    {
-        answer.cores[i]; // need 2 implement
-    }
+    TensorTrain<T> answer;
+    answer.tensor.set_size(size(t1));
+    answer.tensor = t1.tensor + t2.tensor;
+
+    answer.cores[0].set_size(1, t1.size(1), t1.cores[0].n_slices + t2.cores[0].n_slices);
+    answer.cores[1].set_size(t1.cores[1].n_rows + t2.cores[1].n_rows,
+                             t1.cores[1].n_cols + t2.cores[1].n_cols,
+                             t1.cores[1].n_slices + t2.cores[1].n_slices);
+    answer.cores[2].set_size(t1.cores[2].n1 + t2.cores[2].n1, t1.size(3), 1);
+
+    ////////////////////////////submat///////////////////////////
+
+    answer.ttRank[0] = max(t1.ttRank[0], t2.ttRank[0]);
+    answer.ttRank[3] = max(t1.ttRank[3], t2.ttRank[3]);
+    answer.ttRank[1] = t1.ttRank[1] + t2.ttRank[1];
+    answer.ttRank[2] = t1.ttRank[2] + t2.ttRank[2];
+    answer.delta = min(t1.delta, t2.delta);
     return answer;
 }
 
